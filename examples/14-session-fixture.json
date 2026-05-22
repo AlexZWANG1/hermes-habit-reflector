@@ -1,0 +1,43 @@
+[
+  {"session_id": "s_2026_04_25_a", "role": "user", "content": "看下 SWE-bench Pro 的方法学", "timestamp": 1745673600, "turn_n": 1},
+  {"session_id": "s_2026_04_25_a", "role": "assistant", "content": "SWE-bench Pro 是 Scale AI 推出的 1865 道任务...", "timestamp": 1745673605, "turn_n": 2},
+  {"session_id": "s_2026_04_25_a", "role": "user", "content": "用表格", "timestamp": 1745673700, "turn_n": 3},
+  {"session_id": "s_2026_04_25_a", "role": "assistant", "content": "好的, 改成表格...", "timestamp": 1745673710, "turn_n": 4},
+
+  {"session_id": "s_2026_04_27_b", "role": "user", "content": "读一下 METR Time Horizon paper", "timestamp": 1745846400, "turn_n": 1},
+  {"session_id": "s_2026_04_27_b", "role": "assistant", "content": "METR 提出 50% reliability horizon 指标...", "timestamp": 1745846405, "turn_n": 2},
+  {"session_id": "s_2026_04_27_b", "role": "user", "content": "改成 bullet point 列", "timestamp": 1745846500, "turn_n": 3},
+
+  {"session_id": "s_2026_04_30_c", "role": "user", "content": "看 CodeAct paper, 用表格列方法学和数据", "timestamp": 1746105600, "turn_n": 1},
+  {"session_id": "s_2026_04_30_c", "role": "assistant", "content": "[输出表格...]", "timestamp": 1746105610, "turn_n": 2},
+
+  {"session_id": "s_2026_05_02_d", "role": "user", "content": "我刚才在 ChatGPT 跑了一下方案 A, paste 给你看", "timestamp": 1746278400, "turn_n": 1},
+  {"session_id": "s_2026_05_02_d", "role": "assistant", "content": "看到你 paste 了来自 ChatGPT 的内容...", "timestamp": 1746278410, "turn_n": 2},
+
+  {"session_id": "s_2026_05_05_e", "role": "user", "content": "看 SWE-Agent paper, 表格输出", "timestamp": 1746537600, "turn_n": 1},
+  {"session_id": "s_2026_05_05_e", "role": "assistant", "content": "[表格...]", "timestamp": 1746537610, "turn_n": 2},
+
+  {"session_id": "s_2026_05_08_f", "role": "user", "content": "OpenHands 的 SDK 架构能不能看一下", "timestamp": 1746796800, "turn_n": 1},
+  {"session_id": "s_2026_05_08_f", "role": "user", "content": "改成 bullet", "timestamp": 1746796900, "turn_n": 3},
+
+  {"session_id": "s_2026_05_10_g", "role": "user", "content": "Claude 那边跑出来的方案我们对照下", "timestamp": 1746969600, "turn_n": 1},
+  {"session_id": "s_2026_05_10_g", "role": "assistant", "content": "好的, 看你 paste 的内容...", "timestamp": 1746969610, "turn_n": 2},
+
+  {"session_id": "s_2026_05_12_h", "role": "user", "content": "看 Hermes Agent paper, 给我表格", "timestamp": 1747142400, "turn_n": 1},
+
+  {"session_id": "s_2026_05_14_i", "role": "user", "content": "我跑 Cursor 那边出来的代码也 paste 过来对比", "timestamp": 1747315200, "turn_n": 1},
+
+  {"session_id": "s_2026_05_16_j", "role": "user", "content": "看 GAIA benchmark paper, 4 段表格", "timestamp": 1747488000, "turn_n": 1},
+  {"session_id": "s_2026_05_16_j", "role": "user", "content": "改成 bullet 谢谢", "timestamp": 1747488100, "turn_n": 3},
+
+  {"session_id": "s_2026_05_18_k", "role": "user", "content": "继续看 paper, 用表格", "timestamp": 1747660800, "turn_n": 1},
+
+  {"session_id": "s_2026_05_20_l", "role": "user", "content": "我刚才 ChatGPT 那边出了个方案", "timestamp": 1747833600, "turn_n": 1},
+
+  {"session_id": "s_2026_05_21_m", "role": "user", "content": "Refact.ai polyglot paper, bullet point", "timestamp": 1747920000, "turn_n": 1},
+
+  {"session_id": "s_2026_05_22_n", "role": "user", "content": "看 Aider repo map paper, 用表格", "timestamp": 1748006400, "turn_n": 1},
+
+  {"session_id": "s_2026_05_23_o", "role": "user", "content": "再看下 SWE-bench Multimodal, 表格", "timestamp": 1748092800, "turn_n": 1},
+  {"session_id": "s_2026_05_23_o", "role": "user", "content": "改成 bullet", "timestamp": 1748092900, "turn_n": 3}
+]

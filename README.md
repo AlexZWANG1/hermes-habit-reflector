@@ -1,193 +1,284 @@
 # Hermes Habit Reflector
 
-> Hermes Agent 的第 6 层自学习模块。每天凌晨 4 点 retrospective 蒸馏过去 30 天对话历史，
-> 抽取稳定 user habit，自动写入 USER.md 或队列等用户审。
->
-> **零侵入**：通过 cron + 现有 `memory_tool.add()` 接口接入，Hermes 主循环、5 层自学习一行不改。
+> A 6th self-learning layer for [Hermes Agent](https://github.com/NousResearch/hermes-agent).
+> Distills 30 days of conversation history every night → auto-promotes stable user habits to `USER.md`.
+
+![python](https://img.shields.io/badge/python-3.10%2B-blue) ![tests](https://img.shields.io/badge/tests-12%2F12_passing-brightgreen) ![license](https://img.shields.io/badge/license-MIT-blue) ![cost](https://img.shields.io/badge/runtime_cost-%2412%2Fmonth-success)
 
 ---
 
-## 这是什么
+## Why this exists
 
-Hermes 现有自学习全部是 **prospective**——agent 当下凭感觉决定记什么。这导致：
+Hermes' existing 5 self-learning layers are all **prospective** — the agent decides what to remember *in the moment* (via `nudge` at turn 10, or `flush` at session end). This misses:
 
-- 用户 14 次说"用表格"，agent 没记进 USER.md
-- 4 turn 完成的高频任务，触发不了 ≥5 tool_call 的 skill 创建门槛
-- USER.md 500 字被"用户在做笔试题"这种 task state 占满
+- **Stable preferences get forgotten.** You say "use a table" 14 times across 14 sessions; the agent re-discovers it from scratch each session because USER.md was empty or filled with stale task notes.
+- **High-frequency short tasks never become skills.** Hermes' skill creation needs `≥5 tool_call + agent self-judges success`. A 4-turn "read paper, give me a table" task hits this gate exactly never.
+- **USER.md (500 chars) fills with task state, not preferences.** "User is working on the SOTA harness exam" is noise. "User prefers structured output" is signal.
 
-Reflector 加上 **retrospective** 通道：
-
-| | 现有 Hermes | + Habit Reflector |
-|---|---|---|
-| 触发方式 | 当下事件（nudge / flush / 工具结束）| **每天凌晨 4 点** |
-| 数据来源 | 当前 session 对话 | **过去 30 天完整对话历史** |
-| 判断者 | Agent 当下感觉 | **离线小模型 forensic 分析** |
-| 写入对象 | MEMORY.md（agent 写）| **USER.md（≥0.85 conf 自动 promote）+ skill candidates** |
+**The missing piece**: a **retrospective** layer that looks at the *actual conversation history*, not the agent's in-the-moment guess.
 
 ---
 
-## 安装
+## What it does (30-second demo)
 
 ```bash
 git clone https://github.com/zane/hermes-habit-reflector
 cd hermes-habit-reflector
-pip install anthropic              # for real-api mode
-pip install pytest                 # for tests
-
-# 软链 cron hook 进 Hermes
-ln -s "$PWD/hooks/on_cron.py" ~/.hermes/hooks/on_cron.py
+python3 -m src.cli dry-run --fixture examples/14-session-fixture.json --work-dir /tmp/demo
 ```
 
-把以下加进 `~/.hermes/config.yaml`：
+You'll see this:
 
-```yaml
+```
+Distilled 3 claims:
+  · [preference] conf=1.00 · 用户强偏好结构化输出（表格 + bullet）...
+  · [habit]      conf=0.85 · 高频任务：读 paper → 出表格 critique（候选 skill）
+  · [preference] conf=0.85 · 工作日上午 10-13 点出现短 session 高密度...
+
+Promotion summary:
+  · promoted_to_usermd: 3
+  · skill_candidates:   1
+```
+
+And `cat /tmp/demo/memories/USER.md`:
+
+```
+- 用户强偏好结构化输出（表格 + bullet）而非 prose
+  [conf 1.00 · 5 sessions · decay 2026-08-21 · id 35cd77cf]
+- 高频任务：读 paper → 出表格 critique（候选 skill）
+  [conf 0.85 · 3 sessions · decay 2026-06-22 · id 5824826f]
+- 工作日上午 10-13 点出现短 session 高密度（4-6 turn 完成）
+  [conf 0.85 · 3 sessions · decay 2026-08-21 · id 276ed943]
+```
+
+Every entry carries **evidence** (which session/turn supports it), **confidence** (recomputed locally from signal counts, not trusted from the model), and **decay** (auto-expires preference at 90d / habit at 30d / task at 7d).
+
+---
+
+## Architecture · zero-touch into Hermes
+
+```
+~/.hermes/                                    Hermes home (unchanged)
+├── memories/
+│   ├── MEMORY.md              ← Hermes native, agent writes
+│   └── USER.md                ← Reflector writes ≥0.85 conf claims
+├── habit_memory/              ← NEW · Reflector output dir
+│   ├── 2026-05-23.md          ← Daily distillation report
+│   ├── candidates/            ← Skill candidates + pending review queue
+│   ├── rejected/              ← User-rejected claim blacklist
+│   └── backups/               ← USER.md rolling backups (14d)
+├── hooks/
+│   └── on_cron.py             ← NEW · Symlinked from this repo
+└── state.db                   ← Hermes native (Reflector reads only)
+```
+
+**Hermes' 5 existing self-learning layers are not modified.** L1-L5 don't even know L6 exists.
+
+---
+
+## The 6 self-learning layers (where Reflector sits)
+
+| # | Layer | Trigger | Direction |
+|---|---|---|---|
+| L1 | Short-term working memory | every turn | now |
+| L2 | Long-term Episodic (FTS5) | `session_search` tool | now-query |
+| L3 | Dialectic (Honcho plugin, optional) | every N turns | now-reflect |
+| L4 | Curated MEMORY.md / USER.md | `nudge` / `flush` | now-decide |
+| L5 | Skill auto-evolution + 7-day Curator | ≥5 tool_call + Curator interval | now + 7-day |
+| **L6** | **Habit Reflector ⭐** | **daily 4am cron** | **retrospective 30d** |
+
+The Reflector is the only layer that **looks back at history**. Everything else is in-the-moment.
+
+---
+
+## How a claim gets to USER.md (data flow)
+
+```
+┌─────────────────┐
+│  cron 04:00     │
+└────────┬────────┘
+         ▼
+    ┌─────────┐    cold-start week? idle ≥1h? ≥20h since last? ≥50 msg/30d?
+    │ on_cron │──→ NO any → exit
+    └────┬────┘
+         ▼
+    ┌──────────┐  read messages from state.db (last 30d, blacklist-filtered)
+    │ distill  │──→ render prompt → Haiku 4.5 → parse JSON claims
+    └────┬─────┘
+         ▼
+    ┌──────────────────────┐  every claim must have ≥3 evidence refs
+    │ confidence = compute │  3 signals: ≥5 occurrences + ≥3 sessions + ≤7d ago
+    │   (locally, not LLM) │  +0.25 each, base 0.10, optional user_confirmed +0.25
+    └────┬─────────────────┘
+         ▼
+    ┌──────────────────────────────────────────────┐
+    │ promoter buckets by confidence:              │
+    │   conf ≥0.85  →  backup USER.md + append     │
+    │   0.7≤c<0.85  →  candidates/<id>.pending     │
+    │   conf <0.7   →  drop (still in daily report)│
+    │                                              │
+    │ classification == "habit"                    │
+    │   →  candidates/<name>.candidate             │
+    │      (Curator picks up next 7-day run)       │
+    └──────────────────────────────────────────────┘
+```
+
+---
+
+## Install (when you actually want to run it on your Hermes)
+
+```bash
+# 1. Clone
+git clone https://github.com/zane/hermes-habit-reflector
+cd hermes-habit-reflector
+
+# 2. Install runtime dep (only needed for --real-api mode)
+pip install anthropic
+
+# 3. Link cron hook into Hermes
+ln -s "$PWD/hooks/on_cron.py" ~/.hermes/hooks/on_cron.py
+
+# 4. Add config
+cat >> ~/.hermes/config.yaml <<EOF
+
 habit_reflector:
   enabled: true
   cron_hour: 4
   window_days: 30
   cold_start_weeks: 1
+EOF
 ```
+
+That's it. Hermes' built-in cron will pick up the hook starting tomorrow 4am.
 
 ---
 
-## 用法
-
-### Dry-run（推荐先跑这个）
-
-不调真 API，用 canned 响应 + fixture：
+## CLI commands
 
 ```bash
-python -m src.cli dry-run --fixture examples/14-session-fixture.json --work-dir /tmp/reflector-test
-```
-
-预期输出：
-- 3 条 claims
-- 1 条 conf ≥0.85 自动写入 USER.md
-- 1 条 0.7-0.85 进 candidates/ 待用户审
-- 1 条 habit 分类，生成 skill candidate
-
-### 真跑
-
-```bash
-export ANTHROPIC_API_KEY=...
-python -m src.cli run --real-api
-```
-
-### 状态查看
-
-```bash
-python -m src.cli status
-```
-
-### 拒绝一条错的 claim
-
-```bash
-python -m src.cli reject <claim_id> --key-phrase "表格" --reason "我其实不是每次都要表格"
-```
-
-效果：从 USER.md 删除 + 把 "表格" 加进 blacklist，下次 distiller 不再生成类似 claim。
-
-### 回滚 USER.md
-
-```bash
-python -m src.cli rollback 2026-05-22
+python3 -m src.cli dry-run --fixture examples/14-session-fixture.json  # no API call
+python3 -m src.cli run --real-api                                       # real run (needs ANTHROPIC_API_KEY)
+python3 -m src.cli status                                               # show pending / candidates / blacklist
+python3 -m src.cli reject <claim_id> --key-phrase "..." --reason "..."  # blacklist + remove from USER.md
+python3 -m src.cli rollback 2026-05-22                                  # restore USER.md from backup
 ```
 
 ---
 
-## 架构
-
-```
-~/.hermes/                                    Hermes home
-├── memories/
-│   ├── MEMORY.md         ← 原生 · agent 当下写
-│   └── USER.md           ← Reflector 写入 ≥0.85 conf 条目
-├── habit_memory/         ← Reflector 输出目录
-│   ├── 2026-05-23.md     ← 每天一份日报
-│   ├── candidates/       ← skill 候选 + pending review 队列
-│   ├── rejected/         ← blacklist
-│   └── backups/          ← USER.md 写入前的 14 天滚动备份
-├── hooks/
-│   └── on_cron.py        ← cron 入口 (本仓库)
-└── state.db              ← Hermes 原生 SQLite (Reflector 只读)
-```
-
----
-
-## 数据流
-
-```
-[每天 04:00 cron] → on_cron.py
-    │
-    ├── 检查 cold-start week 1? 是 → 跳过
-    ├── 检查 idle ≥1h? 否 → 跳过
-    ├── 检查 距上次 ≥20h? 否 → 跳过
-    ├── 检查 30 天 messages ≥50? 否 → 跳过
-    │
-    ▼
-distiller.distill()
-    │
-    ├── 读 ~/.hermes/state.db (messages 表)
-    ├── 应用 blacklist 过滤
-    ├── 渲染 distill prompt → 调 Haiku 4.5
-    ├── 解析 JSON → list[Claim]
-    │
-    ▼
-render.write_daily_memory()
-    │
-    └── 写 habit_memory/2026-05-23.md (含 evidence + confidence + decay)
-    │
-    ▼
-promoter.promote_claims()
-    │
-    ├── conf ≥0.85 → backup USER.md + memory_tool.add()
-    ├── 0.7 ≤ conf < 0.85 → 写 candidates/<id>.pending.json
-    ├── conf < 0.7 → 仅留日报
-    └── classification == "habit" → 写 candidates/<name>.candidate (给 Curator 看)
-```
-
----
-
-## 设计原则
-
-1. **零侵入**：Hermes 主循环、5 层自学习一行不改
-2. **可审计**：每条 claim 必须 ≥3 evidence，用户能 dispute
-3. **自动 decay**：preference 90d / habit 30d / task 7d
-4. **便宜**：Haiku 4.5 跑 distill，月成本 ~$12
-5. **跟 Curator 解耦**：Reflector 标 candidate skill，Curator 决定建不建
-6. **冷启动安全**：装上第 1 周不跑；前 2 次自动 promote 失效
-
----
-
-## 跟现有 Hermes 自学习的关系
-
-| 层 | 触发 | 对象 | Reflector 怎么 interact |
-|---|---|---|---|
-| L1 短期工作记忆 | 每 turn | messages | 不动 |
-| L2 长期 Episodic | session_search | SQLite | **Reflector 读** |
-| L3 Dialectic Honcho | 每 N turn | Honcho 后端 | 不动（独立运行）|
-| L4 Curated MEMORY/USER | nudge/flush | USER.md / MEMORY.md | **Reflector 写 USER.md** |
-| L5 Skill 自演化 | ≥5 tool_call + Curator | skills/ | **Reflector 写 candidates/ 标 → Curator 决建**|
-| **L6 Habit Reflector (NEW)** | **每天 cron** | **habit_memory/** | — |
-
----
-
-## 评估假说
-
-| 假说 | 测量 |
-|---|---|
-| H1: 重复纠正频率下降 ≥50% | session N 之后 "用表格" 类纠正出现次数 |
-| H2: 高频短任务变 skill 的时间 ∞ → 5-10 个 session | 跟踪 candidates/ 目录产出 |
-| H3: USER.md 中 preference 类占比 <30% → ≥80% | 装前装后对比 |
-
----
-
-## 跑单元测试
+## Testing
 
 ```bash
 pip install pytest
-python -m pytest tests/ -v
+python3 -m pytest tests/ -v
 ```
+
+Expected: `12 passed in 0.02s`.
+
+Test coverage:
+
+| Test | Asserts |
+|---|---|
+| `test_dry_run_full_pipeline` | end-to-end: fixture → distill → render → promote → USER.md exists |
+| `test_blacklist_filters` | blacklisted claim doesn't appear in output |
+| `test_cold_start_caps_confidence` | week-1/2 confidence capped at 0.84 |
+| `test_usermd_char_budget` | USER.md never exceeds Hermes' 1375-char limit |
+| `test_claim_requires_3_evidence` | schema enforces evidence count |
+| `test_claim_validates_classification` | only 4 valid classifications accepted |
+| `test_compute_confidence_*` | 3 signals + explicit confirmation formula |
+| `test_claim_roundtrip` | dict ⇌ Claim serialization |
+
+---
+
+## Design choices worth knowing
+
+1. **Confidence is recomputed locally, not trusted from the model.** The model reports `times_appeared` / `distinct_sessions` / `last_seen_within_days` as raw counts. We compute confidence from a fixed formula — so the model can't "talk up" claims.
+
+2. **Cold-start week 1 doesn't run.** Hermes needs to accumulate ≥50 messages first. Otherwise the distiller would seize on noise.
+
+3. **First 2 successful runs cap confidence at 0.84.** This forces every claim through user-review queue, so the first habits the user sees are vetted.
+
+4. **Reflector doesn't create skills.** It writes `candidates/<name>.candidate` markers. The existing 7-day Curator picks them up and decides whether to actually create the skill. Two cron jobs, clean separation.
+
+5. **No embeddings, no vector DB.** BM25-style keyword retrieval on local SQLite is enough for ~1000 sessions. YAGNI for embeddings until you have 100k+ sessions per user.
+
+6. **Honors blacklist.** When you `reject <claim_id>`, the matching `(classification, key_phrase)` pair goes to a blacklist. Next distiller run filters claims through it before parsing.
+
+---
+
+## What's NOT in v1 (deliberate non-goals)
+
+- ❌ Cross-user habit aggregation (privacy + scope)
+- ❌ Embedding-based retrieval (YAGNI until 100k+ sessions)
+- ❌ Real-time reflector (batch is fine; cost matters)
+- ❌ Reflector auto-creates skills (only Curator does)
+- ❌ Bridge to Screenpipe / external systems (must stand alone)
+
+---
+
+## Cost
+
+Distiller runs once per day, reading 30 days of conversation. With Haiku 4.5 ($1 / $5 per MTok):
+
+- Input: ~400k tokens (compressed 30d window) × $1 = $0.40
+- Output: ~3k tokens × $5 = $0.015
+- **Total: ~$0.40/day · ~$12/month**
+
+Roughly one cup of coffee. Compare to a single Sonnet 4.5 long session ($1-3 just for that one chat).
+
+---
+
+## Project structure
+
+```
+hermes-habit-reflector/
+├── README.md                          ← This file
+├── LICENSE                            ← MIT
+├── requirements.txt                   ← anthropic
+├── requirements-dev.txt               ← pytest
+│
+├── docs/
+│   └── SPEC.md                        ← Full 14-section design spec
+│
+├── src/                               ← 6 modules, ~370 lines Python
+│   ├── __init__.py
+│   ├── schema.py                      ← Claim + EvidenceRef + confidence formula
+│   ├── blacklist.py                   ← User-rejected claim signatures
+│   ├── distiller.py                   ← Read messages → Haiku → parse claims
+│   ├── promoter.py                    ← Write USER.md / candidates / backups
+│   ├── render.py                      ← Render habit_memory/YYYY-MM-DD.md
+│   └── cli.py                         ← dry-run / run / status / reject / rollback
+│
+├── hooks/
+│   └── on_cron.py                     ← Hermes cron entry point
+│
+├── examples/
+│   └── 14-session-fixture.json        ← 27-message synthetic conversation
+│
+└── tests/                             ← 12 unit tests, all passing
+    ├── test_schema.py
+    └── test_pipeline.py
+```
+
+---
+
+## Background research
+
+This module was designed as part of a broader SOTA Agent Harness study. See [`docs/SPEC.md`](docs/SPEC.md) for the full design rationale, including:
+
+- How Hermes' 5 existing self-learning layers actually work (with source-level references to `tools/memory_tool.py`, `agent/curator.py`, `plugins/memory/honcho/`)
+- Why neither Curator nor Honcho fill this gap (strict invariant: Curator only touches skills; Honcho is a parallel system with its own peer card backend, doesn't write USER.md)
+- 3 evaluation hypotheses for v1
+- Reflector vs Honcho dialectic vs Curator: what's actually different
+
+---
+
+## Contributing
+
+This is a research prototype, not a production system. PRs welcome but please:
+
+1. Run `pytest tests/ -v` before opening PR
+2. Don't add embeddings / vector DB (intentional YAGNI)
+3. Don't modify Hermes core (zero-touch invariant)
 
 ---
 
